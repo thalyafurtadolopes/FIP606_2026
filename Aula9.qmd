@@ -1,0 +1,150 @@
+---
+title: "Aula 9: Modelos Não-Lineares e Curvas de Dose-Resposta"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introdução aos Modelos Não-Lineares
+
+Na biologia e fitopatologia, muitas relações não seguem uma linha reta. Processos como o crescimento de colônias fúngicas ou a inibição da germinação por fungicidas frequentemente seguem um padrão **sigmoidal** (em forma de S). Para esses casos, utilizamos **modelos não-lineares**.
+
+Diferente dos modelos lineares simples, os modelos não-lineares podem ter 3 ou mais parâmetros (como o limite superior, limite inferior, inclinação e o ponto de inflexão).
+
+> **Nota da aula:** Existem mais parâmetros (3 ou mais). Queremos saber a dose EC 50. Para achar um modelo que passe perto dos pontos.
+
+## Carregamento de Dados e Bibliotecas
+
+```{r}
+#| message: false
+#| warning: false
+library(readxl)
+library(tidyverse)
+library(drc)
+library(ec50estimator)
+
+# Carrega o conjunto de dados
+df <- read_excel("dados_diversos.xlsx", "sensibilidade_fungicidas")
+```
+
+## Análise Exploratória
+
+Antes de ajustar o modelo, é fundamental visualizar como os dados se comportam.
+
+```{r}
+# Calculando a média da germinação agrupada por isolado e dose
+# Nota da aula: calculou a média da germinação agrupada por isolado de fungo e dose 
+df_mean <- df |> 
+  group_by(code, dose) |>
+  summarise(germ = mean(germination))
+
+# Visualização inicial com faceting
+df_mean |>
+  ggplot(aes(dose, germ, group = code)) +
+  geom_point() +
+  facet_wrap(~ code) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Germinação em função da Dose por Isolado",
+       x = "Dose",
+       y = "Germinação Média")
+```
+
+## Ajuste de Modelos para um Isolado Específico
+
+Vamos filtrar um único isolado para entender o ajuste do modelo.
+
+> **Nota da aula:** criando um filtro para estudar um isolado fúngico só. (Observação: O código filtra o código "FGT28" mas armazena no objeto chamado FGT43).
+
+```{r}
+FGT43 <- df |>
+  filter(code == "FGT28") |>
+  group_by(code, dose) |>
+  summarise(germ = mean(germination)) |>
+  mutate(dose = as.numeric(dose))
+
+FGT43 |>
+  ggplot(aes(dose, germ)) +
+  geom_point() +
+  geom_line() +
+  theme_classic() +
+  labs(title = "Isolado FGT28 (FGT43)")
+```
+
+### Análise de Dose-Resposta (DRC)
+
+Para esses dados, utilizamos a biblioteca `drc` (Dose-Response Curves). Vamos comparar dois modelos comuns:
+1. **LL.3 (Log-Logístico de 3 parâmetros)**: Assume um limite inferior de zero.
+2. **W2.3 (Weibull de 3 parâmetros)**: Um modelo alternativo que pode se ajustar melhor a dados assimétricos.
+
+```{r}
+# Modelo Log-Logístico (LL.3)
+m43a <- drm(germ ~ dose,
+           data = FGT43,
+           fct = LL.3())
+
+# Modelo Weibull (W2.3)
+# Nota da aula: W2.3 é um wibble do modelo, vá na aba help do pacote para entender
+m43b <- drm(germ ~ dose,
+           data = FGT43,
+           fct = W2.3())
+
+summary(m43a)
+summary(m43b)
+```
+
+## Seleção de Modelos: Critério de AIC
+
+O **AIC (Akaike Information Criterion)** é uma medida da qualidade relativa de modelos estatísticos. Ele penaliza a complexidade do modelo (número de parâmetros) para evitar o sobreajuste (overfitting).
+
+> **Nota da aula:** AIC é um critério de escolha de modelo, quanto menor, melhor.
+
+```{r}
+# Comparando o AIC dos dois modelos
+AIC(m43a)
+AIC(m43b)
+
+# Visualizando os modelos ajustados
+plot(m43a, main = "Modelo LL.3")
+plot(m43b, main = "Modelo W2.3")
+```
+
+## Estimativa de EC50 (Dose Efetiva 50%)
+
+A **EC50** é a concentração de um fungicida que reduz a resposta biológica (neste caso, a germinação) em 50% em relação ao máximo. É um parâmetro crucial para comparar a sensibilidade de diferentes isolados.
+
+```{r}
+# Calculando a dose efetiva (ED) para 50% de resposta
+ED(m43a, 50)
+```
+
+## Estimativa em Massa para Todos os Isolados
+
+Quando temos muitos isolados, o pacote `ec50estimator` facilita o cálculo em lote de forma eficiente.
+
+```{r}
+#| warning: false
+df$dose <- as.numeric(df$dose)
+
+# Estimando EC50 para todos os isolados usando LL.3
+df_ec50 <- estimate_EC50(germination ~ dose,
+                         data = df,
+                         isolate_col = "code",
+                         strata_col = "state",
+                         interval = "delta",
+                         fct = drc::LL.3())
+
+# Visualizando os resultados ranqueados
+df_ec50 |>
+  ggplot(aes(reorder(ID, Estimate), Estimate, label = round(Estimate, 2))) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.1) +
+  geom_text(aes(y = Upper), size = 3, nudge_y = 0.1,  hjust = 0) +
+  coord_flip() +
+  theme_classic() + 
+  labs(title = "Ranking de Sensibilidade (EC50)",
+       x = "Isolado (ID)", 
+       y = "EC50 Estimado")
+```
+
